@@ -1,7 +1,12 @@
-# OneSearch — design & build handoff
+# The Retriever — design & build handoff
 
 Status: **DESIGN ONLY — not built yet.** This file is the contract. A new opencode session
 (working directory = this repo) reads it end-to-end, then builds it. Owner: SargentNg. Date: 2026-11-26.
+
+Naming: the product is **The Retriever**. Everything machine-facing is lowercase
+`retriever`: local directory `~/opencode/TheRetriever`, Python package `retriever`, CLI
+`retriever`, systemd units `retriever.service` / `retriever.timer`, log `var/retriever.log`.
+GitHub repo: `SargentNg/TheRetriever` (owner decides final casing; push is over SSH).
 
 ## 1. What it is
 
@@ -45,15 +50,15 @@ OneDrive-only for now), HEIC OCR, .msg/.ost/.pst.
      phase 2);
    - legacy `.doc .xls .ppt` → `skipped_legacy` (LibreOffice revisit is an owner decision);
    - anything else → `skipped_ext` (keep per-extension counts in `status` output).
-9. **Phase-2 OCR is explicit and owner-triggered:** `onesearch index --ocr` processes ≤ 200 files
+9. **Phase-2 OCR is explicit and owner-triggered:** `retriever index --ocr` processes ≤ 200 files
    per run, resumes across runs. `no_text` PDFs: PyMuPDF render → tesseract `--psm 6 -l eng`
    (proven in Archivist). Images: pillow → tesseract `psm 3`. OCR text lands in the same chunks
    table (unit prefix `ocr:`), query API unchanged. HEIC → `skipped_ext` for now.
 10. **Fresh venv** (`.venv`, python3.12) with `pymupdf numpy python-docx openpyxl python-pptx
     pillow`; tesseract binary at `/usr/bin/tesseract` (installed). **Do not reuse Archivist's venv.**
 11. **Ops follow the Archivist pattern** (see `~/.config/systemd/user/archivist*.{service,timer}`):
-    systemd-user oneshot `onesearch.service` + `onesearch.timer` (every 6 h, owner adjusts),
-    log → `var/onesearch.log`, single writer via `var/index.lock`, queries may run concurrently
+    systemd-user oneshot `retriever.service` + `retriever.timer` (every 6 h, owner adjusts),
+    log → `var/retriever.log`, single writer via `var/index.lock`, queries may run concurrently
     (WAL).
 12. **Repo:** public GitHub, SSH-key-only auth, zero document data in the repo (`var/`, `.venv/`
     gitignored). Commit identity `SargentNg <24596997+SargentNg@users.noreply.github.com>`
@@ -63,11 +68,11 @@ OneDrive-only for now), HEIC OCR, .msg/.ost/.pst.
 ## 3. Layout
 
 ```
-~/opencode/OneSearch/
+~/opencode/TheRetriever/
   DESIGN.md  README.md  .gitignore
   .venv/               (gitignored)
-  var/                 (gitignored: index.db, vectors.npy, onesearch.log, index.lock)
-  onesearch/
+  var/                 (gitignored: index.db, vectors.npy, retriever.log, index.lock)
+  retriever/
     __init__.py    # __version__
     cli.py         # argparse: index | query | status | gc
     config.py      # OLLAMA_URL, REMOTE, ROOTS=[("onedrive","")], caps, chunk params; env overrides
@@ -83,16 +88,16 @@ OneDrive-only for now), HEIC OCR, .msg/.ost/.pst.
 ## 4. CLI
 
 ```
-onesearch index [--ocr] [--dry-run] [--force-file RELPATH] [--force-embed]
-onesearch query "text" [-k 10] [--vectors|--keywords] [--under PREFIX]
-onesearch status        # counts by status & extension, npy size, last run, error samples
-onesearch gc            # purge deleted + orphan rows; rewrite npy dense when >25% gaps
+retriever index [--ocr] [--dry-run] [--force-file RELPATH] [--force-embed]
+retriever query "text" [-k 10] [--vectors|--keywords] [--under PREFIX]
+retriever status        # counts by status & extension, npy size, last run, error samples
+retriever gc            # purge deleted + orphan rows; rewrite npy dense when >25% gaps
 ```
 
 Query output: `score  relpath  (top-chunk snippet, ~80 chars)` plus the copyable
 `onedrive:<relpath>` reference for each hit.
 
-## 5. Incremental lifecycle (`onesearch index`)
+## 5. Incremental lifecycle (`retriever index`)
 
 1. `rclone lsf -R --json onedrive:` → live set. On the *first* run also run
    `rclone size "onedrive:"` + file count and log the totals (fills §8; both take minutes —
@@ -109,7 +114,7 @@ Query output: `score  relpath  (top-chunk snippet, ~80 chars)` plus the copyable
 ## 6. Privacy & safety
 
 - Ollama on 127.0.0.1 only. rclone→OneDrive is the only outbound traffic (pre-existing pattern).
-- Writable locations: `OneSearch/var/`, the GitHub remote, `~/.config/systemd/user/`.
+- Writable locations: `TheRetriever/var/`, the GitHub remote, `~/.config/systemd/user/`.
   OneDrive is read-only. If in doubt during a build, stop and ask the owner.
 - The Archivist system at `~/opencode/Archivist` is a read-only reference (tesseract/PSM6
   recipes, rclone quirks, unit style). Never modify it.
@@ -141,7 +146,7 @@ CREATE VIRTUAL TABLE chunks_fts USING fts5(fts_text, tokenize="porter unicode61"
 `var/vectors.npy`: float32 `[N, 768]`; **row i = the chunk whose `vecrows.row` is i**.
 Query loads it with `np.load(..., mmap_mode='r')`. N grows on append; `gc` rewrites it dense and
 remaps `vecrows.row` when `(N - in_use)/N > 0.25`. The .npy is derived data — if lost, rerun
-`onesearch index --force-embed` (re-embeds all `indexed` files; hours, acceptable disaster path).
+`retriever index --force-embed` (re-embeds all `indexed` files; hours, acceptable disaster path).
 
 ## 8. Budget (fill at build, step 0)
 
@@ -154,7 +159,7 @@ npy > ~1.5 GB, drop chunk size before the first full run and note the decision i
 
 ## 9. Acceptance (done when all pass)
 
-1. `onesearch status`: every unit-file is `indexed`/`no_text`/`ocr_candidate`/`skipped_*`;
+1. `retriever status`: every unit-file is `indexed`/`no_text`/`ocr_candidate`/`skipped_*`;
    `error` count ≈ 0 (list any remainders with reasons).
 2. Query tests against **real files** — pick 3 under `onedrive:Family Vault/Scans` (flat folder,
    the 31 recent Archivist docs all have embedded OCR text layers):
@@ -162,9 +167,9 @@ npy > ~1.5 GB, drop chunk size before the first full run and note the decision i
    - a paraphrase of that doc's content → top 5;
    - part of a filename → #1.
    Record the actual test queries + results in `QUERY_TESTS.md` and commit it.
-3. Re-run `onesearch index` → `0 new / 0 changed / 0 deleted` (idempotent).
+3. Re-run `retriever index` → `0 new / 0 changed / 0 deleted` (idempotent).
 4. Query latency < 5 s after first (warm mmap).
-5. `systemctl --user status onesearch.timer` → active; one full cycle in the log.
+5. `systemctl --user status retriever.timer` → active; one full cycle in the log.
 6. Repo pushed; document content verifiably absent from the repo.
 7. Nothing written outside the allowed locations.
 
@@ -189,7 +194,7 @@ npy > ~1.5 GB, drop chunk size before the first full run and note the decision i
 2. `list_od.py`, `extract.py` (PDF first, then office/eml/plaintext), `chunk.py` + unit tests
    for chunking edge cases.
 3. `embed.py`; smoke-test with `--force-file` on one known-good `Family Vault/Scans` doc.
-4. Full `onesearch index` (detach with nohup; compare against §8 budget).
+4. Full `retriever index` (detach with nohup; compare against §8 budget).
 5. `query.py` + acceptance queries (§9.2).
 6. systemd units + first timer cycle.
 7. Phase-2 OCR with `--ocr` — only after the owner approves a 10-file trial batch.
